@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -130,7 +132,7 @@ func jsonList(path string, w http.ResponseWriter) {
 	}
 }
 
-func dirList(path string, w http.ResponseWriter) {
+func dirList(path string, w http.ResponseWriter, header, footer string) {
 	if time.Now().Sub(bucketDirUpdate) > 5*time.Second {
 		buildDirList()
 	}
@@ -160,22 +162,49 @@ func dirList(path string, w http.ResponseWriter) {
 <html>
  <head>
   <title>Index of %s</title>
+	<style>
+body { font-family:arial,sans-serif;line-height:normal; }
+#entries th { cursor:pointer;color:blue;text-decoration:underline; }
+  </style>
  </head>
  <body>
-<h1>Index of %s</h1>
-<table id="entries">
- <tr><th onclick="sortTable(0)">Name</th><th onclick="sortTable(1)">Last modified</th><th onclick="sortTable(2)">Size</th><th onclick="sortTable(3)">StorageClass</th><th onclick="sortTable(4)">ETag</th></tr>
- <tr><th colspan="5"><hr></th></tr>
-`, path, path)
+`, path)
+
+	if header != "" {
+		obj, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+			Bucket: &bucketName,
+			Key:    &header,
+		})
+		if err == nil {
+			io.Copy(w, obj.Body)
+			obj.Body.Close()
+		} else if debug {
+			log.Println("Error grabbing header:", err)
+		}
+	} else {
+		fmt.Fprintf(w,
+			` <h1>Index of %s</h1>
+`, path)
+	}
+
+	fmt.Fprintf(w, ` <table id="entries">
+  <tr><th onclick="sortTable(0)">Name</th><th onclick="sortTable(1)">Last modified</th><th onclick="sortTable(2)">Size</th><th onclick="sortTable(3)">StorageClass</th><th onclick="sortTable(4)">ETag</th></tr>
+  <tr><th colspan="5"><hr></th></tr>
+`)
 	headers := "2"
 	if path != "/" {
 		headers = "3"
-		fmt.Fprintf(w, ` <tr><td><a href="..">Parent Directory</a></td><td align="right"></td><td align="right">-</td><td></td><td></td></tr>
+		fmt.Fprintf(w, `  <tr><td><a href="..">Parent Directory</a></td><td align="right"></td><td align="right">-</td><td></td><td></td></tr>
 `)
 	}
+file_loop:
 	for i, c := range curDir.children {
-		var timeStr string
 		name := c.Name
+		if len(name) > 0 && name[0] == '.' {
+			continue
+		}
+
+		var timeStr string
 		fSize := c.Size
 		fTime := c.Time
 		fETag := c.ETag
@@ -187,6 +216,9 @@ func dirList(path string, w http.ResponseWriter) {
 				if childDir, ok := flatten.subdirs[name[:len(name)-1]]; ok && len(childDir.children) == 1 && fTime == nil {
 					flatten = childDir
 					name = childDir.children[0].Name
+					if len(name) > 0 && name[0] == '.' {
+						continue file_loop
+					}
 					longname = longname + childDir.children[0].Name
 					c = childDir.children[0]
 					fTime = c.Time
@@ -206,14 +238,30 @@ func dirList(path string, w http.ResponseWriter) {
 			timeStr = "&nbsp; " + fTime.UTC().Format(time.DateTime)
 		}
 		fmt.Fprintf(w,
-			` <tr><td num="%d"><a href=%q>%s</a></td><td align="right">%s</td><td align="right" num="%d">&nbsp; %d</td><td>&nbsp; %s<td>&nbsp; %s</td></tr>
+			`  <tr><td num="%d"><a href=%q>%s</a></td><td align="right">%s</td><td align="right" num="%d">&nbsp; %d</td><td>&nbsp; %s<td>&nbsp; %s</td></tr>
 `, i, name, name, timeStr, fSize, fSize, fSC, fETag)
 	}
 
 	fmt.Fprintf(w,
-		`</table>
-</body>
-<script>
+		` </table>
+`)
+
+	if footer != "" {
+		obj, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+			Bucket: &bucketName,
+			Key:    &footer,
+		})
+		if err == nil {
+			io.Copy(w, obj.Body)
+			obj.Body.Close()
+		} else if debug {
+			log.Println("Error grabbing footer:", err)
+		}
+	}
+
+	fmt.Fprintf(w,
+		` </body>
+ <script>
 function sortTable(n) {
   var table, rows, switching, i, x, y, shouldSwitch, dir, switchcount = 0;
   table = document.getElementById("entries");
@@ -284,7 +332,7 @@ function sortTable(n) {
     }
   }
 }
-</script>
+ </script>
 </html>`)
 
 }

@@ -77,15 +77,35 @@ func handler(w http.ResponseWriter, r *http.Request) {
 				jsonList(uri, w)
 				return
 			}
+			var found bool
 			for _, index := range directoryIndex {
 				if testPath := path.Join(uri, index); isFile(testPath) {
-					http.Redirect(w, r, "/"+testPath, http.StatusTemporaryRedirect)
-					return
+					uri = testPath
+					found = true
+					break
 				}
 			}
-			dirList(uri, w)
-			return
+
+			var header, footer string
+			for _, test := range directoryFooter {
+				if testPath := path.Join(uri, test); isFile(testPath) {
+					footer = test
+					break
+				}
+			}
+			for _, test := range directoryHeader {
+				if testPath := path.Join(uri, test); isFile(testPath) {
+					header = test
+					break
+				}
+			}
+
+			if !found {
+				dirList(uri, w, header, footer)
+				return
+			}
 		}
+
 		var obj *s3.GetObjectOutput
 		obj, err = s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
 			Bucket: &bucketName,
@@ -134,47 +154,4 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
-	/*
-
-		if debug {
-			log.Printf("Building request: %#v", bucketURL+r.URL.Path+"?max-keys=1")
-		}
-		req, err := http.NewRequest(r.Method, bucketURL+r.URL.Path+"?max-keys=1", nil)
-		requestTime := time.Now()
-		req.Header.Set("X-Amz-Date", requestTime.Format("20060102T150405Z"))
-		req.Header.Set("X-Amz-Content-SHA256", EmptyStringSHA256)
-		req.Header.Set("User-Agent", "S3-HTTP-Proxy (github.com/pschou/s3-http-proxy)")
-		for _, h := range []string{"Range", "If-Range", "If-Unmodified-Since", "If-Modified-Since",
-			"If-None-Match", "If-Match"} {
-			if hdr := r.Header.Get(h); len(hdr) > 0 {
-				req.Header.Set(h, hdr)
-			}
-		}
-			credentials, err := appCreds.Retrieve(context.TODO())
-			if err != nil {
-				log.Printf("Error refreshing credentials: %v\n", err)
-				http.Error(w, "Error refreshing credentials", http.StatusInternalServerError)
-				return
-			}
-
-		signer.SignHTTP(context.TODO(), credentials, req, EmptyStringSHA256,
-			"s3", region, requestTime)
-
-		if debug {
-			log.Printf("Request built: %#v", req)
-		}
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer resp.Body.Close()
-
-		for _, h := range []string{"Content-Type", "Content-Length", "Content-Encoding",
-			"Last-Modified", "Date", "ETag", "Accept-Ranges", "Range", "Content-Range"} {
-			if hdr := resp.Header.Get(h); len(hdr) > 0 {
-				w.Header().Set(h, hdr)
-			}
-		}*/
 }

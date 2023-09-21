@@ -19,13 +19,13 @@ import (
 
 var (
 	//credentials                    aws.Credentials
-	signer         *v4.Signer
-	bucketName     string
-	uploadHeader   string
-	debug          bool
-	version        string
-	s3Client       *s3.Client
-	directoryIndex []string
+	signer                                           *v4.Signer
+	bucketName                                       string
+	uploadHeader                                     string
+	debug                                            bool
+	version                                          string
+	s3Client                                         *s3.Client
+	directoryIndex, directoryHeader, directoryFooter []string
 )
 
 func main() {
@@ -43,6 +43,8 @@ func main() {
 		return
 	}
 	directoryIndex = strings.Fields(Env("DIRECTORY_INDEX", ""))
+	directoryHeader = strings.Fields(Env("DIRECTORY_HEADER", ""))
+	directoryFooter = strings.Fields(Env("DIRECTORY_FOOTER", ""))
 	uploadHeader = Env("MODIFY_ALLOW_HEADER", "")
 
 	// Load CACert for upstream verification
