@@ -23,6 +23,27 @@ This utility was designed to provide ways and means to:
 
 - This microservice remains small and lightweight in memory and CPU as it does not provide any content caching and threads are only created as load increases.
 
+## Variables
+
+BUCKET_NAME - Name of the bucket, ex: "my-bucket"
+
+BUCKET_REGION - Region in which the bucket is located, ex: "us-east-1"
+
+LISTEN - Bind address to listen, ex: "1.2.3.4:8080"
+
+REFRESH - Time between pulling new keys, ex: "10m"
+
+DIRECTORY_INDEX - List of files to use as an index if found, ex: "index.html index.htm"
+
+DIRECTORY_HEADER - File to use as a header when doing automatic directories, ex: ".HEADER.html"
+
+DIRECTORY_FOOTER - File to use as a header when doing automatic directories, ex: ".FOOTER.html"
+
+MODIFY_ALLOW_HEADER - Header to look for to allow PUT and DELETE methods, the header just has to be set to a non-empty string value, ex: "X-USER"
+
+CACERT - File path to the system CA certificate for outgoing HTTPS connections, ex: "my_roots.pem"
+
+DEBUG - Turn on verbosity, ex: "true"
 
 ## Running from the command line
 
@@ -30,18 +51,20 @@ To run the server on an EC2 instance, call the program like this using
 environment variables.  Some defaults may look like this:
 
 ```
-$ BUCKET_REGION=us-east-1 BUCKET_NAME=repo-test MODIFY_ALLOW_HEADER=X-USER DIRECTORY_INDEX="index.html index.htm index.txt" ./bucket-http-proxy
-Bucket-HTTP-Proxy 0.1.20230920.1037 (https://github.com/pschou/bucket-http-proxy)
+$ BUCKET_REGION=us-east-1 BUCKET_NAME=repo-test MODIFY_ALLOW_HEADER=X-USER ./bucket-http-proxy
+Bucket-HTTP-Proxy 0.1.20230921.0021 (https://github.com/pschou/bucket-http-proxy)
 Environment variables:
   BUCKET_NAME="repo-test"
   BUCKET_REGION="us-east-1"
   LISTEN=":8080" (default)
   REFRESH="20m" (default)
-  DIRECTORY_INDEX="index.html index.htm index.txt"
+  DIRECTORY_INDEX="" (default)
+  DIRECTORY_HEADER="" (default)
+  DIRECTORY_FOOTER="" (default)
   MODIFY_ALLOW_HEADER="X-USER"
   CACERT="" (default)
   DEBUG="false" (default)
-2023/09/20 14:37:14 Listening for HTTP connections on :8080
+2023/09/21 04:23:50 Listening for HTTP connections on :8080
 ```
 
 ## Running using a docker-compose file

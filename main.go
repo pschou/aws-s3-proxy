@@ -63,16 +63,9 @@ func main() {
 		}
 		http.DefaultClient.Transport = &http.Transport{TLSClientConfig: tlsConfig}
 	}
-	debug = Env("DEBUG", "false") != "false"
 
 	// Turn on or off debugging
-
-	// New returns an object of a type that satisfies the aws.CredentialProvider interface
-	/*var appCreds = aws.NewCredentialsCache(ec2rolecreds.New())
-	credentials, err = appCreds.Retrieve(context.TODO())
-	if err != nil {
-		log.Fatalf("Failed to get credentials, %v", err)
-	}*/
+	debug = Env("DEBUG", "false") != "false"
 
 	{
 		sdkConfig, err := config.LoadDefaultConfig(context.TODO())

@@ -73,7 +73,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 	case "GET":
 		if uri == "" || strings.HasSuffix(uri, "/") {
-			if r.Header.Get("Accept") == "list/json" {
+			if strings.SplitN(r.Header.Get("Accept"), ",", 2)[0] == "list/json" {
 				jsonList(uri, w)
 				return
 			}
