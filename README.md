@@ -24,6 +24,8 @@ This utility was designed to provide ways and means to:
 - This microservice remains small and lightweight in memory and CPU as it does not provide any content caching and threads are only created as load increases.
 
 
+## Running from the command line
+
 To run the server on an EC2 instance, call the program like this using
 environment variables.  Some defaults may look like this:
 
@@ -42,7 +44,10 @@ Environment variables:
 2023/09/20 14:37:14 Listening for HTTP connections on :8080
 ```
 
-Running using a docker-compose file:
+## Running using a docker-compose file
+
+See the example docker-compose file in the git repository as it has several settings needed to ensure that the container is able to access the rest endpoint for getting the needed server keys.
+
 ```
 $ docker-compose up -d --build
 Network test-user_default                Created
@@ -50,9 +55,10 @@ Container test-user-nginx-1              Started
 Container test-user-bucket-http-proxy-1  Started   
 ```
 
+## Verify operations
 
+After this is up and running, one may call a curl command like this:
 
-After this is up and running, one may call a http command like this:
 ```
 $ curl -s localhost:8080/
 <!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
@@ -72,7 +78,9 @@ $ curl -s localhost:8080/
 </body></html>
 ```
 
-and an API call to list the contents looks like this:
+## Rest endpoint
+
+To verify the REST API call to list the contents:
 ```
 $ curl -s -H "Accept: list/json" localhost:8080/
 [{"Name":"a/","Size":0}
