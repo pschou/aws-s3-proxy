@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/pschou/go-sorting/numstr"
+	"github.com/valyala/fasthttp"
 )
 
 var (
@@ -92,9 +93,9 @@ func isDir(path string) bool {
 	return true
 }
 
-func jsonList(path string, w http.ResponseWriter) {
-	w.Write([]byte("["))
-	defer w.Write([]byte("]"))
+func jsonList(path string, ctx *fasthttp.RequestCtx) {
+	ctx.Write([]byte("["))
+	defer ctx.Write([]byte("]"))
 
 	if time.Now().Sub(bucketDirUpdate) > 5*time.Second {
 		buildDirList()
@@ -107,22 +108,22 @@ func jsonList(path string, w http.ResponseWriter) {
 	curDir := &bucketDir
 	for len(parts) > 1 {
 		if curDir.subdirs == nil {
-			http.Error(w, "404 path not found: "+path, http.StatusNotFound)
+			ctx.Error("404 path not found: "+path, http.StatusNotFound)
 			return
 		}
 		if d, ok := curDir.subdirs[parts[0]]; ok {
 			curDir = d
 		} else {
-			http.Error(w, "404 path not found: "+path, http.StatusNotFound)
+			ctx.Error("404 path not found: "+path, http.StatusNotFound)
 			return
 		}
 		parts = parts[1:]
 	}
 
-	encoder := json.NewEncoder(w)
+	encoder := json.NewEncoder(ctx)
 	for i, c := range curDir.children {
 		if i > 0 {
-			w.Write([]byte(","))
+			ctx.Write([]byte(","))
 		}
 
 		err := encoder.Encode(c)
@@ -132,7 +133,7 @@ func jsonList(path string, w http.ResponseWriter) {
 	}
 }
 
-func dirList(path string, w http.ResponseWriter, header, footer string) {
+func dirList(path string, ctx *fasthttp.RequestCtx, header, footer string) {
 	if time.Now().Sub(bucketDirUpdate) > 5*time.Second {
 		buildDirList()
 	}
@@ -144,21 +145,22 @@ func dirList(path string, w http.ResponseWriter, header, footer string) {
 	curDir := &bucketDir
 	for len(parts) > 1 {
 		if curDir.subdirs == nil {
-			http.Error(w, "404 path not found: "+path, http.StatusNotFound)
+			ctx.Error("404 path not found: "+path, http.StatusNotFound)
 			return
 		}
 		if d, ok := curDir.subdirs[parts[0]]; ok {
 			curDir = d
 		} else {
-			http.Error(w, "404 path not found: "+path, http.StatusNotFound)
+			ctx.Error("404 path not found: "+path, http.StatusNotFound)
 			return
 		}
 		parts = parts[1:]
 	}
-	w.Header().Set("Content-Type", "text/html;charset=UTF-8")
+	ctx.Response.Header.Set("Content-Type", "text/html;charset=UTF-8")
 
-	fmt.Fprintf(w,
-		`<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+	if !strings.HasSuffix(header, ".htm") && !strings.HasSuffix(header, ".htm") {
+		fmt.Fprintf(ctx,
+			`<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
 <html>
  <head>
   <title>Index of %s</title>
@@ -169,6 +171,7 @@ body { font-family:arial,sans-serif;line-height:normal; }
  </head>
  <body>
 `, path)
+	}
 
 	if header != "" {
 		obj, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
@@ -176,25 +179,25 @@ body { font-family:arial,sans-serif;line-height:normal; }
 			Key:    &header,
 		})
 		if err == nil {
-			io.Copy(w, obj.Body)
+			io.Copy(ctx, obj.Body)
 			obj.Body.Close()
 		} else if debug {
 			log.Println("Error grabbing header:", err)
 		}
 	} else {
-		fmt.Fprintf(w,
+		fmt.Fprintf(ctx,
 			` <h1>Index of %s</h1>
 `, path)
 	}
 
-	fmt.Fprintf(w, ` <table id="entries">
+	fmt.Fprintf(ctx, ` <table id="entries">
   <tr><th onclick="sortTable(0)">Name</th><th onclick="sortTable(1)">Last modified</th><th onclick="sortTable(2)">Size</th><th onclick="sortTable(3)">StorageClass</th><th onclick="sortTable(4)">ETag</th></tr>
   <tr><th colspan="5"><hr></th></tr>
 `)
-	headers := "2"
+	tableHeaders := "2"
 	if path != "/" {
-		headers = "3"
-		fmt.Fprintf(w, `  <tr><td><a href="..">Parent Directory</a></td><td align="right"></td><td align="right">-</td><td></td><td></td></tr>
+		tableHeaders = "3"
+		fmt.Fprintf(ctx, `  <tr><td><a href="..">Parent Directory</a></td><td align="right"></td><td align="right">-</td><td></td><td></td></tr>
 `)
 	}
 file_loop:
@@ -237,30 +240,13 @@ file_loop:
 		if fTime != nil && !fTime.IsZero() {
 			timeStr = "&nbsp; " + fTime.UTC().Format(time.DateTime)
 		}
-		fmt.Fprintf(w,
+		fmt.Fprintf(ctx,
 			`  <tr><td num="%d"><a href=%q>%s</a></td><td align="right">%s</td><td align="right" num="%d">&nbsp; %d</td><td>&nbsp; %s<td>&nbsp; %s</td></tr>
 `, i, name, name, timeStr, fSize, fSize, fSC, fETag)
 	}
 
-	fmt.Fprintf(w,
+	fmt.Fprintf(ctx,
 		` </table>
-`)
-
-	if footer != "" {
-		obj, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
-			Bucket: &bucketName,
-			Key:    &footer,
-		})
-		if err == nil {
-			io.Copy(w, obj.Body)
-			obj.Body.Close()
-		} else if debug {
-			log.Println("Error grabbing footer:", err)
-		}
-	}
-
-	fmt.Fprintf(w,
-		` </body>
  <script>
 function sortTable(n) {
   var table, rows, switching, i, x, y, shouldSwitch, dir, switchcount = 0;
@@ -276,7 +262,7 @@ function sortTable(n) {
     rows = table.rows;
     /* Loop through all table rows (except the
     first, which contains table headers): */
-    for (i = `+headers+`; i < (rows.length - 1); i++) {
+    for (i = %s; i < (rows.length - 1); i++) {
       // Start by saying there should be no switching:
       shouldSwitch = false;
       /* Get the two elements you want to compare,
@@ -333,7 +319,25 @@ function sortTable(n) {
   }
 }
  </script>
+`, tableHeaders)
+
+	if footer != "" {
+		obj, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+			Bucket: &bucketName,
+			Key:    &footer,
+		})
+		if err == nil {
+			io.Copy(ctx, obj.Body)
+			obj.Body.Close()
+		} else if debug {
+			log.Println("Error grabbing footer:", err)
+		}
+	}
+
+	if !strings.HasSuffix(footer, ".htm") && !strings.HasSuffix(footer, ".htm") {
+		fmt.Fprintf(ctx, ` </body>
 </html>`)
+	}
 
 }
 

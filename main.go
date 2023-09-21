@@ -15,6 +15,7 @@ import (
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/valyala/fasthttp"
 )
 
 var (
@@ -113,9 +114,18 @@ func main() {
 		}
 	}()
 
+	// Create custom server.
+	s := &fasthttp.Server{
+		Handler: handler,
+
+		// Every response will contain 'Server: My super server' header.
+		Name: "Bucket-HTTP-Proxy (github.com/pschou/bucket-http-proxy)",
+
+		// Turn on upload streaming
+		StreamRequestBody: true,
+	}
 	log.Printf("Listening for HTTP connections on %s", listenAddr)
-	http.HandleFunc("/", handler)
-	err = http.ListenAndServe(listenAddr, nil)
+	err = s.ListenAndServe(listenAddr)
 	log.Printf("Error: %s", err)
 }
 
@@ -127,26 +137,3 @@ func Env(env, def string) string {
 	fmt.Printf("  %s=%q (default)\n", env, def)
 	return def
 }
-
-/*func GetRegion() string {
-	cfg, err := external.LoadDefaultAWSConfig()
-	if err != nil {
-		return ""
-		//log.Fatalf("Unable to load SDK config, %v", err)
-	}
-
-	md_svc := ec2metadata.New(cfg)
-
-	if !md_svc.Available() {
-		return ""
-		//log.Fatalf("Metadata service cannot be reached.  Are you on an EC2/ECS/Lambda machine?")
-	}
-
-	region, err := md_svc.Region()
-	if err != nil {
-		return ""
-		//log.Fatalf("Could not determine region")
-	}
-
-	return region
-}*/

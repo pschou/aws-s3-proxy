@@ -6,5 +6,6 @@ FLAGS := "-s -w -X main.version=${VERSION}"
 build:
 	CGO_ENABLED=0 go build -ldflags=${FLAGS} -o ${PROG_NAME} *.go
 
-full: build
+tiny:
+	CGO_ENABLED=0 go build -ldflags=${FLAGS} -o ${PROG_NAME} *.go
 	upx --ultra-brute ${PROG_NAME}
