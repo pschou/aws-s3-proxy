@@ -42,6 +42,16 @@ Environment variables:
 2023/09/20 14:37:14 Listening for HTTP connections on :8080
 ```
 
+Running using a docker-compose file:
+```
+$ docker-compose up -d --build
+Network test-user_default                Created
+Container test-user-nginx-1              Started
+Container test-user-bucket-http-proxy-1  Started   
+```
+
+
+
 After this is up and running, one may call a http command like this:
 ```
 $ curl -s localhost:8080/

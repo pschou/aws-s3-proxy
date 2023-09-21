@@ -24,6 +24,7 @@ var (
 type dir struct {
 	children []dirItem
 	subdirs  map[string]*dir
+	size     int64
 }
 type dirItem struct {
 	Name              string
@@ -162,17 +163,23 @@ func dirList(path string, w http.ResponseWriter) {
  </head>
  <body>
 <h1>Index of %s</h1>
-<table><tr><th>Name</th><th>Last modified</th><th>Size</th></tr><tr><th colspan="3"><hr></th></tr>
+<table id="entries">
+ <tr><th onclick="sortTable(0)">Name</th><th onclick="sortTable(1)">Last modified</th><th onclick="sortTable(2)">Size</th><th onclick="sortTable(3)">StorageClass</th><th onclick="sortTable(4)">ETag</th></tr>
+ <tr><th colspan="5"><hr></th></tr>
 `, path, path)
+	headers := "2"
 	if path != "/" {
-		fmt.Fprintf(w, ` <tr><td><a href="..">Parent Directory</a></td><td align="right"></td><td align="right">-</td></tr>
+		headers = "3"
+		fmt.Fprintf(w, ` <tr><td><a href="..">Parent Directory</a></td><td align="right"></td><td align="right">-</td><td></td><td></td></tr>
 `)
 	}
-	for _, c := range curDir.children {
+	for i, c := range curDir.children {
 		var timeStr string
 		name := c.Name
 		fSize := c.Size
 		fTime := c.Time
+		fETag := c.ETag
+		fSC := c.StorageClass
 		{ // Try to flatten directories which don't exist but have files which are in said bucket
 			longname := name
 			flatten := curDir
@@ -181,32 +188,104 @@ func dirList(path string, w http.ResponseWriter) {
 					flatten = childDir
 					name = childDir.children[0].Name
 					longname = longname + childDir.children[0].Name
-					fTime = childDir.children[0].Time
-					fSize = childDir.children[0].Size
 					c = childDir.children[0]
+					fTime = c.Time
+					fSize = c.Size
+					fETag = c.ETag
+					fSC = c.StorageClass
 				} else {
 					break
 				}
 			}
 			name = longname
 		}
+		if len(fETag) > 1 && fETag[0] == '"' && fETag[len(fETag)-1] == '"' {
+			fETag = fETag[1 : len(fETag)-1]
+		}
 		if fTime != nil && !fTime.IsZero() {
 			timeStr = "&nbsp; " + fTime.UTC().Format(time.DateTime)
 		}
-		if fSize > 0 || !strings.HasSuffix(name, "/") {
-			fmt.Fprintf(w,
-				` <tr><td><a href=%q>%s</a></td><td align="right">%s</td><td align="right">&nbsp; %d</td></tr>
-`, name, name, timeStr, fSize)
-		} else {
-			fmt.Fprintf(w,
-				` <tr><td><a href=%q>%s</a></td><td align="right">%s</td><td align="right">-</td></tr>
-`, name, name, timeStr)
-		}
+		fmt.Fprintf(w,
+			` <tr><td num="%d"><a href=%q>%s</a></td><td align="right">%s</td><td align="right" num="%d">&nbsp; %d</td><td>&nbsp; %s<td>&nbsp; %s</td></tr>
+`, i, name, name, timeStr, fSize, fSize, fSC, fETag)
 	}
 
 	fmt.Fprintf(w,
 		`</table>
-</body></html>`)
+</body>
+<script>
+function sortTable(n) {
+  var table, rows, switching, i, x, y, shouldSwitch, dir, switchcount = 0;
+  table = document.getElementById("entries");
+  switching = true;
+  // Set the sorting direction to ascending:
+  dir = "asc";
+  /* Make a loop that will continue until
+  no switching has been done: */
+  while (switching) {
+    // Start by saying: no switching is done:
+    switching = false;
+    rows = table.rows;
+    /* Loop through all table rows (except the
+    first, which contains table headers): */
+    for (i = `+headers+`; i < (rows.length - 1); i++) {
+      // Start by saying there should be no switching:
+      shouldSwitch = false;
+      /* Get the two elements you want to compare,
+      one from current row and one from the next: */
+      x = rows[i].getElementsByTagName("TD")[n];
+      y = rows[i + 1].getElementsByTagName("TD")[n];
+      /* Check if the two rows should switch place,
+      based on the direction, asc or desc: */
+      if (dir == "asc") {
+        if (x.getAttribute("num")) {
+          if (Number(x.getAttribute("num")) > Number(y.getAttribute("num"))) {
+            // If so, mark as a switch and break the loop:
+            shouldSwitch = true;
+            break;
+          }
+        } else {
+          if (x.innerHTML.toLowerCase() > y.innerHTML.toLowerCase()) {
+            // If so, mark as a switch and break the loop:
+            shouldSwitch = true;
+            break;
+          }
+        }
+      } else if (dir == "desc") {
+        if (x.getAttribute("num")) {
+          if (Number(x.getAttribute("num")) < Number(y.getAttribute("num"))) {
+            // If so, mark as a switch and break the loop:
+            shouldSwitch = true;
+            break;
+          }
+        } else {
+          if (x.innerHTML.toLowerCase() < y.innerHTML.toLowerCase()) {
+            // If so, mark as a switch and break the loop:
+            shouldSwitch = true;
+            break;
+          }
+        }
+      }
+    }
+    if (shouldSwitch) {
+      /* If a switch has been marked, make the switch
+      and mark that a switch has been done: */
+      rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);
+      switching = true;
+      // Each time a switch is done, increase this count by 1:
+      switchcount ++;
+    } else {
+      /* If no switching has been done AND the direction is "asc",
+      set the direction to "desc" and run the while loop again. */
+      if (switchcount == 0 && dir == "asc") {
+        dir = "desc";
+        switching = true;
+      }
+    }
+  }
+}
+</script>
+</html>`)
 
 }
 
@@ -227,6 +306,7 @@ func buildDirList() {
 				//fmt.Printf("obj: %#v\n", *c.Key)
 				parts := strings.Split(*c.Key, "/")
 				curDir := &newDir
+				curDir.size += c.Size
 				for len(parts) > 1 && parts[1] != "" {
 					if curDir.subdirs == nil {
 						curDir.subdirs = make(map[string]*dir)
@@ -238,6 +318,7 @@ func buildDirList() {
 						curDir.subdirs[parts[0]] = d
 						curDir = d
 					}
+					curDir.size += c.Size
 					parts = parts[1:]
 				}
 				if len(parts) == 1 {
@@ -249,23 +330,24 @@ func buildDirList() {
 				}
 			}
 		}
-		ensureEntries(&newDir, make(map[string]struct{}))
+		ensureEntries(&newDir, make(map[string]*dir))
 		bucketDir = newDir
 		bucketDirUpdate = time.Now()
 	}
 }
 
-func ensureEntries(d *dir, tmp map[string]struct{}) {
+func ensureEntries(d *dir, tmp map[string]*dir) {
 	if d.subdirs == nil {
 		return
 	}
-	for k, _ := range d.subdirs {
-		tmp[k+"/"] = struct{}{}
+	for k, v := range d.subdirs {
+		tmp[k+"/"] = v
 	}
-	for _, d := range d.children {
-		if strings.HasSuffix(d.Name, "/") {
-			if _, ok := tmp[d.Name]; ok {
-				delete(tmp, d.Name)
+	for i, cd := range d.children {
+		if strings.HasSuffix(cd.Name, "/") {
+			if c, ok := tmp[cd.Name]; ok {
+				d.children[i].Size = c.size
+				delete(tmp, cd.Name)
 			}
 		}
 	}
