@@ -6,7 +6,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
-type dirItem struct {
+type DirItem struct {
 	Name              string
 	Time              *time.Time `json:",omitempty"`
 	Size              int64
