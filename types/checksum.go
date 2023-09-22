@@ -1,4 +1,4 @@
-package main
+package types
 
 type Checksums struct {
 	// This header can be used as a data integrity check to verify that the data
