@@ -233,15 +233,12 @@ file_loop:
 			}
 			name = longname
 		}
-		if len(fETag) > 1 && fETag[0] == '"' && fETag[len(fETag)-1] == '"' {
-			fETag = fETag[1 : len(fETag)-1]
-		}
 		if fTime != nil && !fTime.IsZero() {
 			timeStr = "&nbsp; " + fTime.UTC().Format(time.DateTime)
 		}
 		fmt.Fprintf(ctx,
 			`  <tr><td num="%d"><a href=%q>%s</a></td><td align="right">%s</td><td align="right" num="%d">&nbsp; %d</td><td>&nbsp; %s<td>&nbsp; %s</td></tr>
-`, i, name, name, timeStr, fSize, fSize, fSC, fETag)
+`, i, name, name, timeStr, fSize, fSize, fSC, unquote(fETag))
 	}
 
 	fmt.Fprintf(ctx,

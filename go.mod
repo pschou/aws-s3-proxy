@@ -2,7 +2,12 @@ module main
 
 go 1.20
 
+require github.com/pschou/bucket-http-proxy/types v0.0.0
+
+replace github.com/pschou/bucket-http-proxy/types => ./types
+
 require (
+	dario.cat/mergo v1.0.0
 	github.com/aws/aws-sdk-go-v2 v1.21.0
 	github.com/aws/aws-sdk-go-v2/config v1.18.40
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.38.5
