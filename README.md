@@ -1,9 +1,9 @@
 # Bucket-HTTP-Proxy
 
 This bucket proxy is a lightweight HTTP proxy that can serve out S3 buckets
-securely using the signed request headers method.  All requests are sanitized
-(stripped of all non-relevant headers) and signed when sent to the backend
-bucket for serving resources.
+securely from non-public readable buckets.  All requests are sanitized
+(stripped of all non-relevant headers) and the requests are sent to the backend
+bucket for serving up resources using the policy set on the instance.
 
 This utility was designed to provide ways and means to:
 
@@ -41,8 +41,6 @@ DIRECTORY_FOOTER - File to use as a header when doing automatic directories, ex:
 
 MODIFY_ALLOW_HEADER - Header to look for to allow PUT and DELETE methods, the header just has to be set to a non-empty string value, ex: "X-USER"
 
-CACERT - File path to the system CA certificate for outgoing HTTPS connections, ex: "my_roots.pem"
-
 DEBUG - Turn on verbosity, ex: "true"
 
 ## Running from the command line
@@ -52,7 +50,7 @@ environment variables.  Some defaults may look like this:
 
 ```
 $ BUCKET_REGION=us-east-1 BUCKET_NAME=repo-test MODIFY_ALLOW_HEADER=X-USER ./bucket-http-proxy
-Bucket-HTTP-Proxy 0.1.20230921.0021 (https://github.com/pschou/bucket-http-proxy)
+Bucket-HTTP-Proxy 0.1... (https://github.com/pschou/bucket-http-proxy)
 Environment variables:
   BUCKET_NAME="repo-test"
   BUCKET_REGION="us-east-1"
@@ -61,8 +59,7 @@ Environment variables:
   DIRECTORY_INDEX="" (default)
   DIRECTORY_HEADER="" (default)
   DIRECTORY_FOOTER="" (default)
-  MODIFY_ALLOW_HEADER="X-USER"
-  CACERT="" (default)
+  MODIFY_ALLOW_HEADER="" (default)
   DEBUG="false" (default)
 2023/09/21 04:23:50 Listening for HTTP connections on :8080
 ```

@@ -2,12 +2,8 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
-	"io/ioutil"
 	"log"
-	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -47,23 +43,6 @@ func main() {
 	directoryHeader = strings.Fields(Env("DIRECTORY_HEADER", ""))
 	directoryFooter = strings.Fields(Env("DIRECTORY_FOOTER", ""))
 	uploadHeader = Env("MODIFY_ALLOW_HEADER", "")
-
-	// Load CACert for upstream verification
-	if caFile := Env("CACERT", ""); len(caFile) > 0 {
-		// Load CA cert
-		caCert, err := ioutil.ReadFile(caFile)
-		if err != nil {
-			log.Fatal(err)
-		}
-		caCertPool := x509.NewCertPool()
-		caCertPool.AppendCertsFromPEM(caCert)
-
-		// Setup HTTPS client
-		tlsConfig := &tls.Config{
-			RootCAs: caCertPool,
-		}
-		http.DefaultClient.Transport = &http.Transport{TLSClientConfig: tlsConfig}
-	}
 
 	// Turn on or off debugging
 	debug = Env("DEBUG", "false") != "false"

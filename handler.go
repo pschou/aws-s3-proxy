@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -30,7 +29,7 @@ func handler(ctx *fasthttp.RequestCtx) {
 	switch b2s(ctx.Method()) {
 	case "DELETE":
 		if len(uploadHeader) == 0 || len(ctx.Request.Header.Peek(uploadHeader)) == 0 {
-			ctx.Error("Only GET is supported", http.StatusBadRequest)
+			ctx.Error("Only GET is supported", fasthttp.StatusBadRequest)
 			return
 		}
 
@@ -41,7 +40,7 @@ func handler(ctx *fasthttp.RequestCtx) {
 
 	case "PUT":
 		if len(uploadHeader) == 0 || len(ctx.Request.Header.Peek(uploadHeader)) == 0 {
-			ctx.Error("Only GET is supported", http.StatusBadRequest)
+			ctx.Error("Only GET is supported", fasthttp.StatusBadRequest)
 			return
 		}
 		contentLength, _ := strconv.Atoi(b2s(ctx.Request.Header.Peek("Content-Length")))
@@ -157,21 +156,21 @@ func handler(ctx *fasthttp.RequestCtx) {
 			if debug {
 				log.Printf("Error finding %s so redirecting to /%s/, err: %v\n", uri, uri, err)
 			}
-			ctx.Redirect("/"+uri+"/", http.StatusTemporaryRedirect)
+			ctx.Redirect("/"+uri+"/", fasthttp.StatusTemporaryRedirect)
 			return
 		} else {
 			if debug {
 				log.Printf("Error finding %s, err: %v\n", uri, err)
 			}
-			ctx.Error("404 file not found: "+uri, http.StatusNotFound)
+			ctx.Error("404 file not found: "+uri, fasthttp.StatusNotFound)
 			return
 		}
 
 	default:
-		ctx.Error("Only GET is supported", http.StatusBadRequest)
+		ctx.Error("Only GET is supported", fasthttp.StatusBadRequest)
 		return
 	}
 	if err != nil {
-		ctx.Error(err.Error(), http.StatusInternalServerError)
+		ctx.Error(err.Error(), fasthttp.StatusInternalServerError)
 	}
 }

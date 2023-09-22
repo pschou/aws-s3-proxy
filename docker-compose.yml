@@ -13,6 +13,7 @@ services:
       - MODIFY_ALLOW_HEADER=X-USER
     network_mode: host
     volumes:
+      # To make sure the CACerts are available, volume mount the pki directory:
       - "/etc/pki:/etc/pki:ro,z"
 
   nginx:

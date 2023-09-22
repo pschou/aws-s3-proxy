@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -108,13 +107,13 @@ func jsonList(path string, ctx *fasthttp.RequestCtx) {
 	curDir := &bucketDir
 	for len(parts) > 1 {
 		if curDir.subdirs == nil {
-			ctx.Error("404 path not found: "+path, http.StatusNotFound)
+			ctx.Error("404 path not found: "+path, fasthttp.StatusNotFound)
 			return
 		}
 		if d, ok := curDir.subdirs[parts[0]]; ok {
 			curDir = d
 		} else {
-			ctx.Error("404 path not found: "+path, http.StatusNotFound)
+			ctx.Error("404 path not found: "+path, fasthttp.StatusNotFound)
 			return
 		}
 		parts = parts[1:]
@@ -145,13 +144,13 @@ func dirList(path string, ctx *fasthttp.RequestCtx, header, footer string) {
 	curDir := &bucketDir
 	for len(parts) > 1 {
 		if curDir.subdirs == nil {
-			ctx.Error("404 path not found: "+path, http.StatusNotFound)
+			ctx.Error("404 path not found: "+path, fasthttp.StatusNotFound)
 			return
 		}
 		if d, ok := curDir.subdirs[parts[0]]; ok {
 			curDir = d
 		} else {
-			ctx.Error("404 path not found: "+path, http.StatusNotFound)
+			ctx.Error("404 path not found: "+path, fasthttp.StatusNotFound)
 			return
 		}
 		parts = parts[1:]
@@ -197,7 +196,7 @@ body { font-family:arial,sans-serif;line-height:normal; }
 	tableHeaders := "2"
 	if path != "/" {
 		tableHeaders = "3"
-		fmt.Fprintf(ctx, `  <tr><td><a href="..">Parent Directory</a></td><td align="right"></td><td align="right">-</td><td></td><td></td></tr>
+		fmt.Fprintf(ctx, `  <tr><td><a href="..">../</a></td><td align="right"></td><td align="right">-</td><td></td><td></td></tr>
 `)
 	}
 file_loop:
