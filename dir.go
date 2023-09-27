@@ -241,6 +241,9 @@ body { font-family:arial,sans-serif;line-height:normal; }
 	{ // Get all the metadata
 		wg := sizedwaitgroup.New(8)
 		for i, c := range curDir.list {
+			if len(c.name) > 0 && name[0] == '.' {
+				continue
+			}
 			if len(c.Checksum) == 0 {
 				wg.Add()
 				go func(i int) {
