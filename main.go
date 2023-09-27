@@ -10,6 +10,7 @@ import (
 
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/valyala/fasthttp"
 )
@@ -20,17 +21,17 @@ var (
 	bucketName                                       string
 	uploadHeader                                     string
 	debug                                            bool
-	version                                          string
+	Version                                          string
 	s3Client                                         *s3.Client
 	directoryIndex, directoryHeader, directoryFooter []string
 )
 
 func main() {
 	// Bucket configuration
-	fmt.Println("Bucket-HTTP-Proxy", version, "(https://github.com/pschou/bucket-http-proxy)")
+	fmt.Println("Bucket-HTTP-Proxy", Version, "(github.com/pschou/bucket-http-proxy)")
 	fmt.Println("Environment variables:")
 	bucketName = Env("BUCKET_NAME", "my-bucket")
-	region := Env("BUCKET_REGION", "my-region")
+	//region := Env("BUCKET_REGION", "my-region")
 
 	// Service configuration
 	listenAddr := Env("LISTEN", ":8080")
@@ -47,31 +48,39 @@ func main() {
 	// Turn on or off debugging
 	debug = Env("DEBUG", "false") != "false"
 
-	{
+	getConfig := func() error {
 		sdkConfig, err := config.LoadDefaultConfig(context.TODO())
 		if err != nil {
 			log.Fatalf("Could not load default config, %v", err)
 		}
+
+		imdsClient := imds.NewFromConfig(sdkConfig)
+		gro, err := imdsClient.GetRegion(context.TODO(), &imds.GetRegionInput{})
 		//fmt.Printf("config: %#v\n\n", sdkConfig)
-		sdkConfig.Region = region
 
-		s3Client = s3.NewFromConfig(sdkConfig)
-		//fmt.Printf("s3client: %#v\n\n", s3Client)
+		if err == nil {
+			sdkConfig.Region = gro.Region
+			s3Client = s3.NewFromConfig(sdkConfig)
+		}
+		return err
 	}
 
-	//UploadFile(bucketURL, "test123.txt", []byte("blah"))
-
-	result, err := s3Client.ListBuckets(context.TODO(), &s3.ListBucketsInput{})
-	if err != nil {
-		log.Fatalf("Failed to list buckets: %v\n", err)
+	if err := getConfig(); err != nil {
+		panic(err)
 	}
 
-	if debug {
-		fmt.Printf("result: %#v\n", result.ResultMetadata)
-	}
-	/*for _, bucket := range result.Buckets {
-		fmt.Println("bucket: ", *bucket.Name)
-	}*/
+	/*
+		result, err := s3Client.ListBuckets(context.TODO(), &s3.ListBucketsInput{})
+		if err != nil {
+			log.Fatalf("Failed to list buckets: %v\n", err)
+		}
+
+		if debug {
+			fmt.Printf("result: %#v\n", result.ResultMetadata)
+		}
+		for _, bucket := range result.Buckets {
+			fmt.Println("bucket: ", *bucket.Name)
+		}*/
 
 	go func() {
 		// Refresh credentials every 20 minutes to ensure low latency on requests
@@ -81,15 +90,7 @@ func main() {
 				log.Printf("creds %#v\n", s3Client)
 			}
 			time.Sleep(refreshTime)
-			sdkConfig, err := config.LoadDefaultConfig(context.TODO())
-			if err != nil {
-				log.Printf("Could not load default config, %v", err)
-				continue
-			}
-			//fmt.Printf("config: %#v\n\n", sdkConfig)
-			sdkConfig.Region = region
-
-			s3Client = s3.NewFromConfig(sdkConfig)
+			getConfig()
 		}
 	}()
 
