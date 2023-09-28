@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -27,32 +26,32 @@ type DirItem struct {
 	Count        int64                    `json:",omitempty"`
 	eTag         string                   `json:",omitempty"`
 	StorageClass types.ObjectStorageClass `json:",omitempty"`
-	//Owner             *types.Owner              `json:",omitempty"`
-	//RestoreStatus     *types.RestoreStatus      `json:",omitempty"`
-	Checksum string `json:",omitempty"`
+	Checksum     string                   `json:",omitempty"`
+	isDir        bool
+	list         []*DirItem
 }
 
-func (d *DirItem) getHash(base string) {
+func (d *DirItem) getHead(base string) {
 	if len(d.Checksum) > 0 || len(d.Name) == 0 || d.Name[len(d.Name)-1] == '/' {
 		return
 	}
-	di := *d
-	di.Checksum, di.Time = getHash(base+d.Name, di.eTag, d.realTime)
-	*d = di
-}
+	name := base + d.Name
+	eTag := d.eTag
+	cmpTime := d.realTime
 
-func getHash(name, eTag string, cmpTime *time.Time) (outHash string, outTime *time.Time) {
-	hashCacheMutex.Lock()
-	defer hashCacheMutex.Unlock()
 	if debug {
 		log.Println("cache check", fmt.Sprintf("%q%q", name, eTag))
 	}
-	if h, ok := hashCache[fmt.Sprintf("%q%q", name, eTag)]; ok && h.realTime.Equal(*cmpTime) {
+	hashCacheMutex.Lock()
+	h, ok := hashCache[fmt.Sprintf("%q%q", name, eTag)]
+	hashCacheMutex.Unlock()
+
+	if ok && h.realTime.Equal(*cmpTime) {
 		if debug {
 			log.Println("cache hit")
 		}
-		outHash = h.hash
-		outTime = &h.time
+		d.Checksum = h.hash
+		d.Time = &h.time
 		return
 	} else {
 		if debug {
@@ -66,14 +65,14 @@ func getHash(name, eTag string, cmpTime *time.Time) (outHash string, outTime *ti
 		Bucket:       &bucketName,
 		Key:          &name,
 		ChecksumMode: types.ChecksumModeEnabled,
-		//	ObjectAttributes: []types.ObjectAttributes{types.ObjectAttributesEtag, types.ObjectAttributesChecksum},
 	})
 	if err == nil {
-		outHash = encodeChecksum(obj)
+		outHash := encodeChecksum(obj)
 		if debug {
 			log.Println("cache save", fmt.Sprintf("%q%q", name, unquote(*obj.ETag)), outHash)
 		}
 
+		var outTime *time.Time
 		if d, ok := obj.Metadata["date"]; ok {
 			if t, err := time.Parse(time.DateTime, d); err == nil {
 				outTime = &t
@@ -84,8 +83,11 @@ func getHash(name, eTag string, cmpTime *time.Time) (outHash string, outTime *ti
 			outTime = obj.LastModified
 		}
 
+		hashCacheMutex.Lock()
 		hashCache[fmt.Sprintf("%q%q", name, unquote(*obj.ETag))] = hashdat{time: *outTime, hash: outHash, realTime: *obj.LastModified}
-		//*cmpTime = *obj.LastModified
+		hashCacheMutex.Unlock()
+		d.Time = outTime
+		d.Checksum = outHash
 	}
 	return
 }
@@ -106,79 +108,73 @@ type hashdat struct {
 	hash     string
 }
 
-type Dir struct {
-	list        []DirItem
-	size, count int64
-}
-
 type Root struct {
-	subdirs map[string]*Dir
+	objects map[string]*DirItem
 }
 
+// Use the objects map to determine if an item is a directory (either explicit or implicit)
+func isDir(test string) bool {
+	obj, exists := bucketDir.objects[test]
+	return exists && obj.isDir
+}
+
+// Use the objects map to determine if an item is a file
 func isFile(test string) bool {
-	if time.Now().Sub(bucketDirUpdate) > bucketTimeout {
-		buildDirList()
-	}
-
-	d, f := path.Split(test)
-	if curdir, ok := bucketDir.subdirs[d]; ok {
-		for _, child := range curdir.list {
-			if child.Name == f {
-				return true
-			}
-		}
-	}
-	return false
+	obj, exists := bucketDir.objects[test]
+	return exists && !obj.isDir
 }
 
-func isDir(test string) (exist bool) {
-	if time.Now().Sub(bucketDirUpdate) > bucketTimeout {
-		buildDirList()
-	}
-	_, exist = bucketDir.subdirs[test]
-	return
-}
-
-func jsonList(dir string, ctx *fasthttp.RequestCtx) {
-	ctx.Write([]byte("["))
-	defer ctx.Write([]byte("]"))
-
-	if time.Now().Sub(bucketDirUpdate) > bucketTimeout {
-		buildDirList()
-	}
-
-	curDir, ok := bucketDir.subdirs[dir]
-	if !ok {
-		ctx.Error("404 path not found: "+dir, fasthttp.StatusNotFound)
-		return
-	}
+// Walk the object map providing the list of objects in a JSON formatted reply.
+func jsonList(baseDir string, ctx *fasthttp.RequestCtx, recursive bool) {
+	ctx.Write([]byte("{\"/\":\n["))
+	defer ctx.Write([]byte("]}"))
 
 	encoder := json.NewEncoder(ctx)
+	dirs := []string{baseDir}
+	wg := sizedwaitgroup.New(8)
+	objects := bucketDir.objects
 
-	{ // Get all the metadata
-		wg := sizedwaitgroup.New(8)
-		for i, c := range curDir.list {
-			if len(c.Checksum) == 0 {
-				wg.Add()
-				go func(i int) {
-					defer wg.Done()
-					curDir.list[i].getHash(dir)
-				}(i)
-			}
-		}
-		wg.Wait()
-	}
-
-	for i, c := range curDir.list {
+	for i := 0; i < len(dirs); i++ {
 		if i > 0 {
-			ctx.Write([]byte(","))
+			fmt.Fprintf(ctx, "],%q:\n[", "/"+strings.TrimPrefix(dirs[i], baseDir))
 		}
-
-		err := encoder.Encode(c)
-		if err != nil {
+		curDir, ok := objects[dirs[i]]
+		if !ok {
+			ctx.Error("404 path not found: "+dirs[i], fasthttp.StatusNotFound)
 			return
 		}
+
+		{ // Get all the metadata for this directory
+			for j, c := range curDir.list {
+				if len(c.Checksum) == 0 {
+					wg.Add()
+					go func(j int) {
+						defer wg.Done()
+						curDir.list[j].getHead(dirs[i])
+					}(j)
+				}
+			}
+			wg.Wait()
+		}
+
+		var pastFirst bool
+		for _, c := range curDir.list {
+			if recursive && len(c.Name) > 0 && c.Name[len(c.Name)-1] == '/' {
+				dirs = append(dirs, dirs[i]+c.Name)
+			}
+			if !pastFirst {
+				pastFirst = true
+			} else {
+				ctx.Write([]byte(","))
+			}
+
+			err := encoder.Encode(c)
+			if err != nil {
+				return
+			}
+		}
 	}
+
 }
 
 func dirList(dir string, ctx *fasthttp.RequestCtx, header, footer string) {
@@ -186,7 +182,7 @@ func dirList(dir string, ctx *fasthttp.RequestCtx, header, footer string) {
 		buildDirList()
 	}
 
-	curDir, ok := bucketDir.subdirs[dir]
+	curDir, ok := bucketDir.objects[dir]
 	if !ok {
 		ctx.Error("404 path not found: "+dir, fasthttp.StatusNotFound)
 		return
@@ -241,14 +237,14 @@ body { font-family:arial,sans-serif;line-height:normal; }
 	{ // Get all the metadata
 		wg := sizedwaitgroup.New(8)
 		for i, c := range curDir.list {
-			if len(c.name) > 0 && name[0] == '.' {
+			if len(c.Name) > 0 && c.Name[0] == '.' {
 				continue
 			}
 			if len(c.Checksum) == 0 {
 				wg.Add()
 				go func(i int) {
 					defer wg.Done()
-					curDir.list[i].getHash(dir)
+					curDir.list[i].getHead(dir)
 				}(i)
 			}
 		}
@@ -393,10 +389,20 @@ function sortTable(n) {
 func buildDirList() {
 	bucketDirLock.Lock()
 	defer bucketDirLock.Unlock()
+	// Short circuit again after lock
+	if time.Now().Sub(bucketDirUpdate) < bucketTimeout {
+		return
+	}
 
 	if bucketDirUpdate.IsZero() || time.Now().Sub(bucketDirUpdate) > bucketTimeout {
 		lop := s3.NewListObjectsV2Paginator(s3Client, &s3.ListObjectsV2Input{Bucket: &bucketName})
-		newDir := Root{subdirs: make(map[string]*Dir)}
+		newDir := Root{objects: make(map[string]*DirItem)}
+		RootItem := &DirItem{Name: "", isDir: true}
+		newDir.objects[""] = RootItem
+
+		var next, pathObject *DirItem
+		var ok bool
+
 		for lop.HasMorePages() {
 			page, err := lop.NextPage(context.TODO())
 			if err != nil {
@@ -407,91 +413,50 @@ func buildDirList() {
 			for _, c := range page.Contents {
 				parts := strings.Split(*c.Key, "/")
 
-				var curDir, prevDir string
-				if len(parts[len(parts)-1]) > 0 {
-					count = 1
+				if len(parts[len(parts)-1]) > 0 { // If the object is a file
+					count = 1 // Make sure we count it in the object count under a path
 				} else {
-					count = 0
+					count = 0 // Directories are omitted
 				}
 
+				// Ensure the directory structure is built
+				var curPath string
+				pathObject = RootItem
 				for len(parts) > 1 {
-					prevDir = curDir
-					curDir = curDir + parts[0] + "/"
+					curPath = curPath + parts[0] + "/"
 
-					if ncd, ok := newDir.subdirs[curDir]; ok {
-						ncd.size += c.Size
-						ncd.count += count
+					if next, ok = newDir.objects[curPath]; !ok {
+						next = &DirItem{Name: parts[0] + "/", Size: c.Size, Count: count, isDir: true}
+						newDir.objects[curPath] = next
+						pathObject.list = append(pathObject.list, next)
 					} else {
-						if len(parts) == 2 && parts[1] == "" {
-							tmp := newDir.subdirs[prevDir]
-							di := DirItem{Name: parts[0] + "/", Time: c.LastModified, realTime: c.LastModified, StorageClass: c.StorageClass}
-							tmp.list = append(tmp.list, di)
-							//newDir.subdirs[prevDir] = tmp
-							newDir.subdirs[curDir] = &Dir{size: c.Size, count: count}
-							continue contents_loop
-						} else {
-							tmp := newDir.subdirs[prevDir]
-							di := DirItem{Name: parts[0] + "/"}
-							tmp.list = append(tmp.list, di)
-							//newDir.subdirs[prevDir] = tmp
-							newDir.subdirs[curDir] = &Dir{size: c.Size, count: count}
-						}
-						//newDir.subdirs[curDir] = ncd
-						//} else if cd.Time.IsZero() {
-						//	newDir.subdirs[prevDir].Time = c.LastModified
-						//	newDir.subdirs[prevDir].Owner = c.Owner
+						pathObject.Size += c.Size
+						pathObject.Count += count
+					}
+					pathObject = next
+
+					if len(parts) == 2 && len(parts[1]) == 0 {
+						next.Time = c.LastModified
+						next.realTime = c.LastModified
+						next.StorageClass = c.StorageClass
+						continue contents_loop
 					}
 					parts = parts[1:]
 				}
-				tmp, ok := newDir.subdirs[curDir]
-				if !ok {
-					tmp = &Dir{}
-					newDir.subdirs[curDir] = tmp
-				}
-				tmp.list = append(tmp.list, DirItem{Name: parts[0], Size: c.Size, Time: c.LastModified, realTime: c.LastModified,
-					eTag: unquote(*c.ETag), StorageClass: c.StorageClass})
-				//newDir.subdirs[curDir] = tmp
+
+				next = &DirItem{Name: parts[0], Size: c.Size, Time: c.LastModified, realTime: c.LastModified,
+					eTag: unquote(*c.ETag), StorageClass: c.StorageClass}
+				newDir.objects[*c.Key] = next
+				pathObject.list = append(pathObject.list, next)
 			}
 		}
 
-		for dir, v := range newDir.subdirs {
-			sort.Slice(v.list, func(i, j int) bool { return numstr.LessThanFold(v.list[i].Name, v.list[j].Name) })
-			for i, c := range v.list {
-				if c.Name[len(c.Name)-1] == '/' {
-					d := newDir.subdirs[dir+c.Name]
-					v.list[i].Size = d.size
-					v.list[i].Count = d.count
-				}
+		for _, obj := range newDir.objects {
+			if len(obj.list) > 1 {
+				sort.Slice(obj.list, func(i, j int) bool { return numstr.LessThanFold(obj.list[i].Name, obj.list[j].Name) })
 			}
 		}
 		bucketDir = newDir
 		bucketDirUpdate = time.Now()
 	}
 }
-
-/*
-func ensureEntries(d *dir, base string, tmp map[string]*dir) {
-	if d.subdirs == nil {
-		return
-	}
-	for k, v := range d.subdirs {
-		d, f := path.Split(k[len(k)-1])
-		_, tmp[f+"/"] = v
-	}
-	for i, cd := range d.children {
-		if strings.HasSuffix(cd.Name, "/") {
-			if c, ok := tmp[cd.Name]; ok {
-				d.children[i].Size = c.size
-				delete(tmp, cd.Name)
-			}
-		}
-	}
-	for k, _ := range tmp {
-		d.children = append(d.children, DirItem{Name: k})
-		delete(tmp, k)
-	}
-	sort.Slice(d.children, func(i, j int) bool { return numstr.LessThanFold(d.children[i].Name, d.children[j].Name) })
-	for _, recursive := range d.subdirs {
-		ensureEntries(recursive, tmp)
-	}
-}*/

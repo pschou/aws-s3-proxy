@@ -51,23 +51,29 @@ func main() {
 	getConfig := func() error {
 		sdkConfig, err := config.LoadDefaultConfig(context.TODO())
 		if err != nil {
-			log.Fatalf("Could not load default config, %v", err)
+			log.Println("Could not load default config,", err)
+			return err
 		}
 
 		imdsClient := imds.NewFromConfig(sdkConfig)
 		gro, err := imdsClient.GetRegion(context.TODO(), &imds.GetRegionInput{})
+		if err != nil {
+			log.Println("Could not get region property,", err)
+			return err
+		}
+
+		sdkConfig.Region = gro.Region
+		s3Client = s3.NewFromConfig(sdkConfig)
 		//fmt.Printf("config: %#v\n\n", sdkConfig)
 
-		if err == nil {
-			sdkConfig.Region = gro.Region
-			s3Client = s3.NewFromConfig(sdkConfig)
-		}
-		return err
+		return nil
 	}
 
+	fmt.Println("Testing call to AWS...")
 	if err := getConfig(); err != nil {
-		panic(err)
+		os.Exit(1)
 	}
+	fmt.Println("Success!")
 
 	/*
 		result, err := s3Client.ListBuckets(context.TODO(), &s3.ListBucketsInput{})

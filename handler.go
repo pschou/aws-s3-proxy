@@ -123,10 +123,16 @@ func handler(ctx *fasthttp.RequestCtx) {
 			}
 		}
 
-		//var hasChecksum bool
+		// If a checksum header is provided, unmarshall it
 		if cs := ctx.Request.Header.Peek("Checksum"); len(cs) != 0 {
-			//hasChecksum = true
 			unmarshalChecksum(cs, inputObj)
+			if len(inputObj.ChecksumAlgorithm) == 0 {
+				if debug {
+					log.Printf("Invalid checksum formatted string: %q", b2s(cs))
+				}
+				ctx.Error(fmt.Sprintf("Invalid checksum formatted string: %q", b2s(cs)), fasthttp.StatusExpectationFailed)
+				return
+			}
 		}
 
 		// If no checksum algorithm is specified, default to SHA256
@@ -138,72 +144,64 @@ func handler(ctx *fasthttp.RequestCtx) {
 		result, err = s3Client.PutObject(context.TODO(), inputObj)
 
 		if err == nil {
-			/*if hasChecksum {
-				var checksumMatch bool
-				if inputObj.ChecksumSHA256 != nil && result.ChecksumSHA256 != nil {
-					checksumMatch = *inputObj.ChecksumSHA256 == *result.ChecksumSHA256
-				} else if inputObj.ChecksumSHA1 != nil && result.ChecksumSHA1 != nil {
-					checksumMatch = *inputObj.ChecksumSHA1 == *result.ChecksumSHA1
-				} else if inputObj.ChecksumCRC32 != nil && result.ChecksumCRC32 != nil {
-					checksumMatch = *inputObj.ChecksumCRC32 == *result.ChecksumCRC32
-				} else if inputObj.ChecksumCRC32C != nil && result.ChecksumCRC32C != nil {
-					checksumMatch = *inputObj.ChecksumCRC32C == *result.ChecksumCRC32C
-				}
-				if !checksumMatch {
-					ctx.SetStatusCode(fasthttp.StatusExpectationFailed)
-					return
-				}
-			}*/
 			ctx.SetStatusCode(fasthttp.StatusCreated)
 		} else {
 			ctx.Error(err.Error(), fasthttp.StatusExpectationFailed)
 		}
 		if debug {
 			log.Printf("Upload result: %#v  err: %v\n", result, err)
-			//	log.Printf("Middleware: %v \n", result.ResultMetadata)
 		}
 		return
 
 	case method == "HEAD":
-		var obj *s3.HeadObjectOutput
-		obj, err = s3Client.HeadObject(context.TODO(), &s3.HeadObjectInput{
-			Bucket:       &bucketName,
-			Key:          &uri,
-			ChecksumMode: types.ChecksumModeEnabled,
-			//		ObjectAttributes: []types.ObjectAttributes{types.ObjectAttributesEtag,
-			//			types.ObjectAttributesChecksum, types.ObjectAttributesStorageClass,
-			//			types.ObjectAttributesObjectSize},
-		})
-		if debug {
-			log.Printf("Got object: %#v  with err %v", obj, err)
+		if time.Now().Sub(bucketDirUpdate) > bucketTimeout {
+			buildDirList()
 		}
-		if err == nil {
-			ctx.Response.Header.Set("Content-Length", fmt.Sprintf("%d", obj.ContentLength))
 
-			if d, ok := obj.Metadata["date"]; ok {
-				if t, err := time.Parse(time.DateTime, d); err == nil {
-					ctx.Response.Header.Set("Last-Modified", t.Format(time.RFC1123))
-					obj.LastModified = nil // Prevent Last-Modified from being sent twice
+		obj, exist := bucketDir.objects[uri]
+		if !exist {
+			if _, exist := bucketDir.objects[uri+"/"]; exist {
+				if debug {
+					log.Printf("Error finding %s so redirecting to /%s/, err: %v\n", uri, uri, err)
 				}
+				ctx.Redirect("/"+uri+"/", fasthttp.StatusTemporaryRedirect)
+			} else {
+				ctx.SetStatusCode(fasthttp.StatusNotFound)
 			}
-			if obj.LastModified != nil {
-				ctx.Response.Header.Set("Last-Modified", (*obj.LastModified).UTC().Format(time.RFC1123))
-			}
-
-			// Set the Content type from the mime values
-			ctx.Response.Header.Set("Content-Type", getMime(uri))
-
-			if cs := encodeChecksum(obj); cs != "" {
-				ctx.Response.Header.Set("ETag", fmt.Sprintf("%q", cs))
-			}
+			return
 		}
+
+		if obj.Time != nil {
+			ctx.Response.Header.Set("Last-Modified", obj.Time.Format(time.RFC1123))
+		}
+		if !obj.isDir {
+			if len(obj.Checksum) == 0 {
+				dir, _ := path.Split(uri)
+				//log.Println("get checksum", uri)
+				obj.getHead(dir)
+			}
+			ctx.Response.Header.Set("Content-Length", fmt.Sprintf("%d", obj.Size))
+			ctx.Response.Header.Set("Content-Type", getMime(uri))
+			ctx.Response.Header.Set("ETag", fmt.Sprintf("%q", obj.Checksum))
+		}
+		return
 
 	case method == "GET":
+		// If a directory listing is asked for, handle this with one of our directory functions
 		if len(uri) == 0 || uri[len(uri)-1] == '/' {
-			if strings.SplitN(b2s(ctx.Request.Header.Peek("Accept")), ",", 2)[0] == "list/json" {
-				jsonList(uri, ctx)
+			if time.Now().Sub(bucketDirUpdate) > bucketTimeout {
+				buildDirList()
+			}
+
+			// When a JSON list is requested
+			if accept := strings.SplitN(b2s(ctx.Request.Header.Peek("Accept")), ",", 2); accept[0] == "list/json" {
+				jsonList(uri, ctx,
+					len(accept) == 2 && strings.HasPrefix(accept[1], "recursive"), // Should this be a recursive listing
+				)
 				return
 			}
+
+			// When a directory index is provided and is found
 			var found bool
 			for _, index := range directoryIndex {
 				if testPath := path.Join(uri, index); isFile(testPath) {

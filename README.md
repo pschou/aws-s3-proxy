@@ -94,12 +94,73 @@ $ curl -s localhost:8080/
 ...
 ```
 
-## Rest endpoint
+## Download a file
+
+To download a file use the standard HTTP GET.  Note that the download header includes the ETag with a checksum of the payload.  A file uploaded through other means may not sue the SHA256 hash.
+
+```
+$ curl -i http://localhost:8080/checksummed.txt
+Server: Bucket-HTTP-Proxy (github.com/pschou/bucket-http-proxy)
+Date: Thu, 28 Sep 2023 12:42:10 GMT
+Content-Type: text/plain
+Content-Length: 18
+Last-Modified: Thu, 28 Sep 2023 12:39:25 UTC
+Etag: "{SHA256}162bde086e81f1f13d0a06f17244fc4441d6f6d78f0236e5fb7c268bec748411"
+
+I am checksummed!
+```
+
+```
+$ curl -i http://localhost:8080/notsummed.txt
+HTTP/1.1 200 OK
+Server: Bucket-HTTP-Proxy (github.com/pschou/bucket-http-proxy)
+Date: Thu, 28 Sep 2023 12:49:27 GMT
+Content-Type: text/plain
+Content-Length: 70
+Last-Modified: Thu, 28 Sep 2023 12:49:25 UTC
+Etag: "{SHA256}8f1e498cae1aff70ea8bc764b1e280b100de7023fb33ad982fbe24caea7fb763"
+
+I am not checksummed in the header, but become checksummed on upload!
+```
+
+## Upload a file
+
+A user which has permissions to upload a file (such as determined by the X-USER in example below) can do so by a http POST call.  When uploading is it recommended to include a checksum in the header to ensure the file is complete and no errors were introduced in the transfer process:
+
+```
+$ cat checksummed.txt
+I am checksummed!
+$ sha256sum checksummed.txt
+162bde086e81f1f13d0a06f17244fc4441d6f6d78f0236e5fb7c268bec748411  checksummed.txt
+
+$ curl -i -X POST --data-binary @checksummed.txt -H "X-USER: 1" -H 'Checksum: {SHA256}162bde086e81f1f13d0a06f17244fc4441d6f6d78f0236e5fb7c268bec748411' http://localhost:8080/checksummed.txt
+
+HTTP/1.1 201 Created
+Server: Bucket-HTTP-Proxy (github.com/pschou/bucket-http-proxy)
+Date: Thu, 28 Sep 2023 12:39:23 GMT
+Content-Length: 0
+```
+
+One can upload a file without asserting the expected checksum, like this:
+```
+$ curl -i -X POST --data-binary @notsummed.txt -H "X-USER: 1" http://localhost:8080/notsummed.txt
+
+HTTP/1.1 201 Created
+Server: Bucket-HTTP-Proxy (github.com/pschou/bucket-http-proxy)
+Date: Thu, 28 Sep 2023 12:49:24 GMT
+Content-Length: 0
+```
+
+
+## JSON Rest endpoint
 
 To verify the REST API call to list the contents:
 ```
 $ curl -s -H "Accept: list/json" localhost:8080/
-[{"Name":"a/","Size":0}
+{"/":
+[{"Name":"a_subdir/","Size":0}
+,{"Name":"checksummed.txt","Time":"2023-09-28T12:39:25Z","Size":18,"StorageClass":"STANDARD","Checksum":"{SHA256}162bde086e81f1f13d0a06f17244fc4441d6f6d78f0236e5fb7c268bec748411"}
+,{"Name":"notsummed.txt","Time":"2023-09-28T12:49:25Z","Size":70,"StorageClass":"STANDARD","Checksum":"{SHA256}8f1e498cae1aff70ea8bc764b1e280b100de7023fb33ad982fbe24caea7fb763"}
 ...
-]
+]}
 ```
