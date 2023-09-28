@@ -67,7 +67,7 @@ Environment variables:
 
 ## Running using a docker-compose file
 
-See the example docker-compose file in the git repository as it has several settings needed to ensure that the container is able to access the rest endpoint for getting the needed server keys.
+See the example docker-compose.yml file in the git repository as it has several settings needed to ensure that the container is able to access the rest endpoint for getting the needed server keys.  One may also look at the nginx.conf file to see how the reverse proxy is setup to point to this container.
 
 ```
 $ docker-compose up -d --build
@@ -154,7 +154,8 @@ Content-Length: 0
 
 ## JSON Rest endpoint
 
-To verify the REST API call to list the contents:
+To verify the REST API call to list the contents.
+
 ```
 $ curl -s -H "Accept: list/json" localhost:8080/
 {"/":
@@ -163,4 +164,81 @@ $ curl -s -H "Accept: list/json" localhost:8080/
 ,{"Name":"notsummed.txt","Time":"2023-09-28T12:49:25Z","Size":70,"StorageClass":"STANDARD","Checksum":"{SHA256}8f1e498cae1aff70ea8bc764b1e280b100de7023fb33ad982fbe24caea7fb763"}
 ...
 ]}
+```
+
+## PUT + Action headers for controlling resources
+
+All of these headers require the `X-USER` header to be present and set to some non-empty value.  These `Action` headers are available for managing resources:
+
+### Copy
+
+To copy a file from one path to another or one bucket to another, use the copy action.
+
+The syntax is: `COPY SOURCE` and the URI is the destination.
+
+The source can be any of the following:
+- /file_object.txt - intra-bucket copy
+- bucket_name/file_object.txt - inter-bucket copy
+- arn:aws:s3:::accesspoint//object/ - specify the exact Amazon Resource Name (ARN)
+
+https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-points.html
+
+```
+# Within a bucket copy:
+$ curl -i -X PUT -H "Action: COPY /notsummed.txt" -H "X-USER: 1" http://localhost:8080/notsummed2.txt
+
+HTTP/1.1 201 Created
+Server: Bucket-HTTP-Proxy (github.com/pschou/bucket-http-proxy)
+Date: Thu, 28 Sep 2023 14:01:00 GMT
+Content-Length: 0
+Cache-Control: no-cache
+
+
+# Bucket to bucket copy use the BUCKET/FILE syntax.  In the example below note the '/' after the source_bucket name:
+$ curl -i -X PUT -H "Action: COPY source_bucket/notsummed.txt" -H "X-USER: 1" http://localhost:8080/notsummed2.txt
+```
+
+### Move / Rename
+
+To move a file from one path to another within a bucket.
+
+The syntax is: `MOVE SOURCE` and the URI is the destination.
+
+```
+$ curl -i -X PUT -H "Action: MOVE /notsummed3.txt" -H "X-USER: 1" http://localhost:8080/notsummed4.txt
+
+HTTP/1.1 410 Gone
+Server: Bucket-HTTP-Proxy (github.com/pschou/bucket-http-proxy)
+Date: Thu, 28 Sep 2023 14:10:39 GMT
+Content-Length: 0
+Cache-Control: no-cache
+```
+
+### Delete
+
+To delete a file, use the delete action.  Note that the delete action will return gone if the request was accepted without regard to whether the file exited before the request.
+
+```
+$ curl -i -X PUT -H "Action: DELETE" -H "X-USER: 1" http://localhost:8080/notsummed4.txt
+
+HTTP/1.1 410 Gone
+Server: Bucket-HTTP-Proxy (github.com/pschou/bucket-http-proxy)
+Date: Thu, 28 Sep 2023 14:16:15 GMT
+Content-Length: 0
+Cache-Control: no-cache
+```
+
+### Version check
+
+To get the version number of the proxy server.  A reminder: this is only available to authenticated queries.
+
+```
+$ curl -i -X PUT -H "Action: Tea" -H "X-USER: 1" http://localhost:8080/
+
+HTTP/1.1 418 I'm a teapot
+Server: Bucket-HTTP-Proxy (github.com/pschou/bucket-http-proxy)
+Date: Thu, 28 Sep 2023 13:36:40 GMT
+Content-Length: 0
+Cache-Control: no-cache
+Version: 0.1.20230928.0931
 ```

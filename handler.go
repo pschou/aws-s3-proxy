@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"path"
 	"strconv"
 	"strings"
@@ -30,18 +31,19 @@ func handler(ctx *fasthttp.RequestCtx) {
 
 	switch {
 	case isPrivileged && method == "PUT":
-		if isPrivileged {
-			ctx.Response.Header.Set("Allow", "GET, PUT, POST, HEAD")
-		} else {
-			ctx.Response.Header.Set("Allow", "GET, HEAD")
-		}
+		ctx.Response.Header.Set("Cache-Control", "no-cache")
 
-		switch strings.ToLower(b2s(ctx.Request.Header.Peek("Action"))) {
+		// Parse out the Action header and parse out the first word.
+		action := strings.SplitN(b2s(ctx.Request.Header.Peek("Action")), " ", 2)
+		switch strings.ToLower(action[0]) {
 		case "delete":
-			_, err = s3Client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+			resp, err := s3Client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 				Bucket: &bucketName,
 				Key:    &uri,
 			})
+			if debug {
+				log.Printf("Delete %q %#v", uri, resp)
+			}
 			if err == nil {
 				ctx.SetStatusCode(fasthttp.StatusGone)
 			} else {
@@ -49,11 +51,22 @@ func handler(ctx *fasthttp.RequestCtx) {
 			}
 
 		case "copy":
-			dst := strings.TrimPrefix(b2s(ctx.Request.Header.Peek("Destination")), "/")
+			if len(action) == 1 || len(action[1]) < 2 {
+				ctx.Error(err.Error(), fasthttp.StatusExpectationFailed)
+				return
+			}
+			src := action[1]
+			if src[0] == '/' {
+				src = bucketName + src
+			}
+			src = url.QueryEscape(src)
+			if debug {
+				log.Println("copy", src, "->", uri)
+			}
 			_, err = s3Client.CopyObject(context.TODO(), &s3.CopyObjectInput{
 				Bucket:     &bucketName,
-				CopySource: &uri,
-				Key:        &dst,
+				CopySource: &src,
+				Key:        &uri,
 			})
 			if err == nil {
 				ctx.SetStatusCode(fasthttp.StatusCreated)
@@ -62,20 +75,29 @@ func handler(ctx *fasthttp.RequestCtx) {
 			}
 
 		case "move":
-			dst := strings.TrimPrefix(b2s(ctx.Request.Header.Peek("Destination")), "/")
+			if len(action) == 1 || len(action[1]) < 2 || action[1][0] != '/' {
+				ctx.Error(err.Error(), fasthttp.StatusExpectationFailed)
+				return
+			}
+			src := url.QueryEscape(bucketName + action[1])
+			if debug {
+				log.Println("move", src, "->", uri)
+			}
+
 			_, err = s3Client.CopyObject(context.TODO(), &s3.CopyObjectInput{
 				Bucket:     &bucketName,
-				CopySource: &uri,
-				Key:        &dst,
+				CopySource: &src,
+				Key:        &uri,
 			})
 			if err != nil {
 				ctx.Error(err.Error(), fasthttp.StatusLocked)
 				return
 			}
 
+			src = action[1][1:]
 			_, err = s3Client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 				Bucket: &bucketName,
-				Key:    &uri,
+				Key:    &src,
 			})
 			if err == nil {
 				ctx.SetStatusCode(fasthttp.StatusGone)
