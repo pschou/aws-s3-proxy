@@ -38,7 +38,13 @@ func loadMimeFile(filename string) {
 	var count int
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
+		quoted := false
+		fields := strings.FieldsFunc(scanner.Text(), func(r rune) bool {
+			if r == '"' {
+				quoted = !quoted
+			}
+			return !quoted && (r == '\t' || r == ' ')
+		})
 		if len(fields) <= 1 || fields[0][0] == '#' {
 			continue
 		}

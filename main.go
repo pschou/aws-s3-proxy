@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
-	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials/ec2rolecreds"
 	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/valyala/fasthttp"
@@ -17,53 +17,74 @@ import (
 
 var (
 	//credentials                    aws.Credentials
-	signer                                           *v4.Signer
 	bucketName                                       string
 	uploadHeader                                     string
 	debug                                            bool
 	Version                                          string
 	s3Client                                         *s3.Client
 	directoryIndex, directoryHeader, directoryFooter []string
+	imdsClient                                       *imds.Client
 )
+
+func getIMDS() (region, ARN, ID string) {
+	/*sdkConfig, err := config.LoadDefaultConfig(context.TODO())
+	if err != nil {
+		log.Fatal("Could not load default config,", err)
+	}*/
+
+	imdsClient = imds.New(imds.Options{})
+	gro, err := imdsClient.GetRegion(context.TODO(), &imds.GetRegionInput{})
+	if err != nil {
+		log.Fatal("Could not get region property,", err)
+	}
+
+	iam, err := imdsClient.GetIAMInfo(context.TODO(), &imds.GetIAMInfoInput{})
+	if err != nil {
+		log.Fatal("Could not get IAM property,", err)
+	}
+
+	return gro.Region, iam.IAMInfo.InstanceProfileArn, iam.IAMInfo.InstanceProfileID
+}
 
 func main() {
 	// Bucket configuration
 	fmt.Println("Bucket-HTTP-Proxy", Version, "(github.com/pschou/bucket-http-proxy)")
 	fmt.Println("Environment variables:")
-	bucketName = Env("BUCKET_NAME", "my-bucket")
-	//region := Env("BUCKET_REGION", "my-region")
+	bucketName = Env("BUCKET_NAME", "my-bucket", "The name of the bucket to be served")
 
 	// Service configuration
-	listenAddr := Env("LISTEN", ":8080")
-	refreshTime, err := time.ParseDuration(Env("REFRESH", "20m"))
+	listenAddr := Env("LISTEN", ":8080", "The listening port to serve the contents of the bucket from")
+	refreshTime, err := time.ParseDuration(Env("REFRESH", "20m", "The refresh interval for grabbing new AMI credentials"))
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	directoryIndex = strings.Fields(Env("DIRECTORY_INDEX", ""))
-	directoryHeader = strings.Fields(Env("DIRECTORY_HEADER", ""))
-	directoryFooter = strings.Fields(Env("DIRECTORY_FOOTER", ""))
-	uploadHeader = Env("MODIFY_ALLOW_HEADER", "")
+	directoryIndex = strings.Fields(Env("DIRECTORY_INDEX", "", "Which file to use for a directory index, for example: \"index.html index.htm\""))
+	directoryHeader = strings.Fields(Env("DIRECTORY_HEADER", "", "If an html file is specified it will be prepended to the directory listing, for example: \"header.html\""))
+	directoryFooter = strings.Fields(Env("DIRECTORY_FOOTER", "", "Like header but appended to the directory listing, for example: \"footer.html\" or \"/.footer.html\" for an absolute path"))
+	uploadHeader = Env("MODIFY_ALLOW_HEADER", "", "Look for this header in the request to allow bucket write permissions")
+	Env("SSL_CERT_FILE", "", "Override the system CA chain default with this CA file")
 
 	// Turn on or off debugging
-	debug = Env("DEBUG", "false") != "false"
+	debug = Env("DEBUG", "false", "Turn on debugging output for evaluating what is happening") != "false"
+
+	fmt.Println("EC2 Environment:")
+	region, arn, id := getIMDS()
+	fmt.Println("  AWS_REGION:", region)
+	fmt.Println("  IMDS_ARN:", arn)
+	fmt.Println("  IMDS_ID:", id)
 
 	getConfig := func() error {
-		sdkConfig, err := config.LoadDefaultConfig(context.TODO())
-		if err != nil {
-			log.Println("Could not load default config,", err)
-			return err
-		}
+		// Get a credential provider from the configured role attached to the currently running EC2 instance
+		provider := ec2rolecreds.New(func(o *ec2rolecreds.Options) {
+			o.Client = imdsClient
+		})
 
-		imdsClient := imds.NewFromConfig(sdkConfig)
-		gro, err := imdsClient.GetRegion(context.TODO(), &imds.GetRegionInput{})
-		if err != nil {
-			log.Println("Could not get region property,", err)
-			return err
-		}
-
-		sdkConfig.Region = gro.Region
-		s3Client = s3.NewFromConfig(sdkConfig)
+		// Construct a client, wrap the provider in a cache, and supply the region for the desired service
+		s3Client = s3.New(s3.Options{
+			Credentials: aws.NewCredentialsCache(provider),
+			Region:      region,
+		})
 		//fmt.Printf("config: %#v\n\n", sdkConfig)
 
 		return nil
@@ -71,9 +92,13 @@ func main() {
 
 	fmt.Println("Testing call to AWS...")
 	if err := getConfig(); err != nil {
-		os.Exit(1)
+		log.Fatal("Error getting config:", err)
 	}
-	fmt.Println("Success!")
+	buildDirList()
+	if bucketDirError != nil {
+		log.Fatal("Error listing bucket:", bucketDirError)
+	}
+	fmt.Println("Success!  Found", bucketDir.count, "objects using", bucketDir.size)
 
 	/*
 		result, err := s3Client.ListBuckets(context.TODO(), &s3.ListBucketsInput{})
@@ -115,9 +140,10 @@ func main() {
 	log.Printf("Error: %s", err)
 }
 
-func Env(env, def string) string {
+func Env(env, def, usage string) string {
+	fmt.Println("  #", usage)
 	if e := os.Getenv(env); len(e) > 0 {
-		fmt.Printf("  %s=%q\n", env, e)
+		fmt.Printf("  %s=%q\n", usage, env, e)
 		return e
 	}
 	fmt.Printf("  %s=%q (default)\n", env, def)

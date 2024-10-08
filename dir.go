@@ -13,6 +13,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/pschou/go-convert/bin"
 	"github.com/pschou/go-sorting/numstr"
 	"github.com/remeh/sizedwaitgroup"
 	"github.com/valyala/fasthttp"
@@ -67,20 +68,27 @@ func (d *DirItem) getHead(base string) {
 		ChecksumMode: types.ChecksumModeEnabled,
 	})
 	if err == nil {
-		outHash := encodeChecksum(obj)
+		var outHash string
+		if d.Size > 0 {
+			outHash = encodeChecksum(obj)
+		}
 		if debug {
 			log.Println("cache save", fmt.Sprintf("%q%q", name, unquote(*obj.ETag)), outHash)
 		}
 
 		var outTime *time.Time
-		if d, ok := obj.Metadata["date"]; ok {
-			if t, err := time.Parse(time.DateTime, d); err == nil {
+		if dateVal, ok := obj.Metadata["date"]; ok {
+			if t, err := time.Parse(time.DateTime, dateVal); err == nil {
 				outTime = &t
 			} else {
 				outTime = obj.LastModified
 			}
 		} else {
 			outTime = obj.LastModified
+		}
+
+		if link, ok := obj.Metadata["link"]; ok {
+			outHash = "-> " + link
 		}
 
 		hashCacheMutex.Lock()
@@ -95,6 +103,7 @@ func (d *DirItem) getHead(base string) {
 var (
 	bucketDir       Root
 	bucketDirLock   sync.Mutex
+	bucketDirError  error
 	bucketDirUpdate time.Time
 	bucketTimeout   = 15 * time.Second
 
@@ -110,6 +119,8 @@ type hashdat struct {
 
 type Root struct {
 	objects map[string]*DirItem
+	size    int64
+	count   int64
 }
 
 // Use the objects map to determine if an item is a directory (either explicit or implicit)
@@ -178,10 +189,6 @@ func jsonList(baseDir string, ctx *fasthttp.RequestCtx, recursive bool) {
 }
 
 func dirList(dir string, ctx *fasthttp.RequestCtx, header, footer string) {
-	if time.Now().Sub(bucketDirUpdate) > bucketTimeout {
-		buildDirList()
-	}
-
 	curDir, ok := bucketDir.objects[dir]
 	if !ok {
 		ctx.Error("404 path not found: "+dir, fasthttp.StatusNotFound)
@@ -265,27 +272,11 @@ body { font-family:arial,sans-serif;line-height:normal; }
 		if fTime != nil && !fTime.IsZero() {
 			timeStr = "&nbsp; " + fTime.UTC().Format(time.DateTime)
 		}
-		humanSize := float32(fSize)
-		humanSuffix := ""
-		for _, prefix := range []string{"k", "M", "G", "T", "P"} {
-			if humanSize >= 1000 {
-				humanSize = humanSize / 1024
-				humanSuffix = prefix
-			} else {
-				break
-			}
-		}
-
-		var humanize string
-		if len(humanSuffix) == 0 {
-			humanize = fmt.Sprintf("%d", fSize)
-		} else {
-			humanize = fmt.Sprintf("%0.2f%s", humanSize, humanSuffix)
-		}
+		binSize := bin.NewBytes(fSize)
 
 		fmt.Fprintf(ctx,
-			`  <tr><td num="%d"><a href=%q>%s</a></td><td align="right">%s</td><td align="right" num="%d">&nbsp; %s</td><td>&nbsp; %s</td></tr>
-`, i, name, name, timeStr, fSize, humanize, fChecksum)
+			`  <tr><td num="%d"><a href=%q>%s</a></td><td align="right">%s</td><td align="right" num="%d">&nbsp; %0.4v</td><td>&nbsp; %s</td></tr>
+`, i, name, name, timeStr, fSize, binSize, fChecksum)
 	}
 
 	fmt.Fprintf(ctx,
@@ -393,6 +384,7 @@ func buildDirList() {
 	if time.Now().Sub(bucketDirUpdate) < bucketTimeout {
 		return
 	}
+	var listErr error
 
 	if bucketDirUpdate.IsZero() || time.Now().Sub(bucketDirUpdate) > bucketTimeout {
 		lop := s3.NewListObjectsV2Paginator(s3Client, &s3.ListObjectsV2Input{Bucket: &bucketName})
@@ -406,12 +398,18 @@ func buildDirList() {
 		for lop.HasMorePages() {
 			page, err := lop.NextPage(context.TODO())
 			if err != nil {
+				if debug {
+					log.Println("Error listing bucket:", err)
+				}
+				listErr = err
 				break
 			}
 			var count int64
 		contents_loop:
 			for _, c := range page.Contents {
 				parts := strings.Split(*c.Key, "/")
+				newDir.size += c.Size
+				newDir.count++
 
 				if len(parts[len(parts)-1]) > 0 { // If the object is a file
 					count = 1 // Make sure we count it in the object count under a path
@@ -456,6 +454,7 @@ func buildDirList() {
 				sort.Slice(obj.list, func(i, j int) bool { return numstr.LessThanFold(obj.list[i].Name, obj.list[j].Name) })
 			}
 		}
+		bucketDirError = listErr
 		bucketDir = newDir
 		bucketDirUpdate = time.Now()
 	}

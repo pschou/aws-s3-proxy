@@ -174,6 +174,8 @@ All of these headers require the `X-USER` header to be present and set to some n
 
 To copy a file from one path to another or one bucket to another, use the copy action.
 
+Note that some reverse proxies may be sharing a path that is a subfolder in a bucket; in this case the full path from the base of the bucket must be specified in the the source.
+
 The syntax is: `COPY SOURCE` and the URI is the destination.
 
 The source can be any of the following:
@@ -201,6 +203,8 @@ $ curl -i -X PUT -H "Action: COPY source_bucket/notsummed.txt" -H "X-USER: 1" ht
 ### Move / Rename
 
 To move a file from one path to another within a bucket.
+
+Note that some reverse proxies may be sharing a path that is a subfolder in a bucket; in this case the full path from the base of the bucket must be specified in the the source.
 
 The syntax is: `MOVE SOURCE` and the URI is the destination.
 

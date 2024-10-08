@@ -42,7 +42,7 @@ func handler(ctx *fasthttp.RequestCtx) {
 				Key:    &uri,
 			})
 			if debug {
-				log.Printf("Delete %q %#v", uri, resp)
+				log.Printf("Delete %q %#v, err: %v", uri, resp, err)
 			}
 			if err == nil {
 				ctx.SetStatusCode(fasthttp.StatusGone)
@@ -56,45 +56,99 @@ func handler(ctx *fasthttp.RequestCtx) {
 				return
 			}
 			src := action[1]
-			if src[0] == '/' {
+			switch src[0] {
+			case '/':
 				src = bucketName + src
+			case '.':
+				d, _ := path.Split(uri)
+				src = bucketName + "/" + path.Clean(d+"/"+src)
 			}
 			src = url.QueryEscape(src)
-			if debug {
-				log.Println("copy", src, "->", uri)
-			}
 			_, err = s3Client.CopyObject(context.TODO(), &s3.CopyObjectInput{
 				Bucket:     &bucketName,
 				CopySource: &src,
 				Key:        &uri,
 			})
+			if debug {
+				log.Println("copy", src, "->", uri, "err:", err)
+			}
 			if err == nil {
 				ctx.SetStatusCode(fasthttp.StatusCreated)
 			} else {
 				ctx.Error(err.Error(), fasthttp.StatusLocked)
 			}
 
-		case "move":
-			if len(action) == 1 || len(action[1]) < 2 || action[1][0] != '/' {
+		case "link":
+			if len(action) == 1 || len(action[1]) < 2 || action[1][0] != '.' {
 				ctx.Error(err.Error(), fasthttp.StatusExpectationFailed)
 				return
 			}
-			src := url.QueryEscape(bucketName + action[1])
-			if debug {
-				log.Println("move", src, "->", uri)
+
+			body := bytes.NewReader([]byte{})
+			inputObj := &s3.PutObjectInput{
+				Bucket:        &bucketName,
+				ContentLength: int64(0),
+				Key:           &uri,
+				Body:          body,
+				Metadata:      make(map[string]string),
 			}
 
+			if d := ctx.Request.Header.Peek("Content-Date"); len(d) != 0 {
+				if t, err := dateparse.ParseAny(b2s(d)); err == nil {
+					inputObj.Metadata["date"] = t.Format(time.DateTime)
+				}
+			}
+
+			inputObj.Metadata["link"] = action[1]
+			var result *s3.PutObjectOutput
+			result, err = s3Client.PutObject(context.TODO(), inputObj)
+
+			if err == nil {
+				ctx.SetStatusCode(fasthttp.StatusCreated)
+			} else {
+				ctx.Error(err.Error(), fasthttp.StatusExpectationFailed)
+			}
+			if debug {
+				log.Printf("Link result: %#v  err: %v\n", result, err)
+			}
+			return
+
+		case "move":
+			if len(action) == 1 || len(action[1]) < 2 {
+				ctx.Error(err.Error(), fasthttp.StatusExpectationFailed)
+				return
+			}
+			src := action[1]
+			switch src[0] {
+			case '/':
+			case '.':
+				d, _ := path.Split(uri)
+				src = path.Clean(d + "/" + src)
+				if src[0] == '.' {
+					// avoid escaping the path to go to another bucket
+					ctx.Error(err.Error(), fasthttp.StatusExpectationFailed)
+					return
+				}
+			default:
+				// non-intra-bucket paths are not allowed for the move operation
+				ctx.Error("path is not relative or absolue", fasthttp.StatusExpectationFailed)
+				return
+			}
+			e_src := url.QueryEscape(bucketName + "/" + src)
 			_, err = s3Client.CopyObject(context.TODO(), &s3.CopyObjectInput{
 				Bucket:     &bucketName,
-				CopySource: &src,
+				CopySource: &e_src,
 				Key:        &uri,
 			})
+			if debug {
+				log.Println("move", e_src, "or", src, "->", uri, "err:", err)
+			}
 			if err != nil {
 				ctx.Error(err.Error(), fasthttp.StatusLocked)
 				return
 			}
 
-			src = action[1][1:]
+			// After it has been copied, delete the source object
 			_, err = s3Client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 				Bucket: &bucketName,
 				Key:    &src,
@@ -113,6 +167,22 @@ func handler(ctx *fasthttp.RequestCtx) {
 			ctx.SetStatusCode(fasthttp.StatusNotImplemented)
 		}
 		return
+
+	case isPrivileged && method == "DELETE":
+		ctx.Response.Header.Set("Cache-Control", "no-cache")
+
+		resp, err := s3Client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+			Bucket: &bucketName,
+			Key:    &uri,
+		})
+		if debug {
+			log.Printf("Delete %q %#v, err: %v", uri, resp, err)
+		}
+		if err == nil {
+			ctx.SetStatusCode(fasthttp.StatusGone)
+		} else {
+			ctx.Error(err.Error(), fasthttp.StatusLocked)
+		}
 
 	case isPrivileged && method == "POST":
 		contentLength, _ := strconv.Atoi(b2s(ctx.Request.Header.Peek("Content-Length")))
@@ -145,21 +215,23 @@ func handler(ctx *fasthttp.RequestCtx) {
 			}
 		}
 
-		// If a checksum header is provided, unmarshall it
-		if cs := ctx.Request.Header.Peek("Checksum"); len(cs) != 0 {
-			unmarshalChecksum(cs, inputObj)
-			if len(inputObj.ChecksumAlgorithm) == 0 {
-				if debug {
-					log.Printf("Invalid checksum formatted string: %q", b2s(cs))
+		if contentLength > 0 {
+			// If a checksum header is provided, unmarshall it
+			if cs := ctx.Request.Header.Peek("Checksum"); len(cs) != 0 {
+				unmarshalChecksum(cs, inputObj)
+				if len(inputObj.ChecksumAlgorithm) == 0 {
+					if debug {
+						log.Printf("Invalid checksum formatted string: %q", b2s(cs))
+					}
+					ctx.Error(fmt.Sprintf("Invalid checksum formatted string: %q", b2s(cs)), fasthttp.StatusExpectationFailed)
+					return
 				}
-				ctx.Error(fmt.Sprintf("Invalid checksum formatted string: %q", b2s(cs)), fasthttp.StatusExpectationFailed)
-				return
 			}
-		}
 
-		// If no checksum algorithm is specified, default to SHA256
-		if len(inputObj.ChecksumAlgorithm) == 0 {
-			inputObj.ChecksumAlgorithm = types.ChecksumAlgorithmSha256
+			// If no checksum algorithm is specified, default to SHA256
+			if len(inputObj.ChecksumAlgorithm) == 0 {
+				inputObj.ChecksumAlgorithm = types.ChecksumAlgorithmSha256
+			}
 		}
 
 		var result *s3.PutObjectOutput
@@ -211,8 +283,16 @@ func handler(ctx *fasthttp.RequestCtx) {
 	case method == "GET":
 		// If a directory listing is asked for, handle this with one of our directory functions
 		if len(uri) == 0 || uri[len(uri)-1] == '/' {
+			if isPrivileged {
+				ctx.Response.Header.Set("Cache-Control", "no-cache")
+			}
+
 			if time.Now().Sub(bucketDirUpdate) > bucketTimeout {
 				buildDirList()
+			}
+			if bucketDirError != nil {
+				ctx.Error("Error listing bucket", fasthttp.StatusInternalServerError)
+				return
 			}
 
 			// When a JSON list is requested
@@ -276,6 +356,11 @@ func handler(ctx *fasthttp.RequestCtx) {
 			log.Printf("Got object: %#v  with err %v", obj, err)
 		}
 		if err == nil {
+			if link, ok := obj.Metadata["link"]; ok {
+				ctx.Redirect(link, fasthttp.StatusTemporaryRedirect)
+				return
+			}
+
 			// Found the file, so serve it out!
 			ctx.Response.Header.SetContentLength(int(obj.ContentLength))
 
